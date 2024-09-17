@@ -1,0 +1,120 @@
+<?php
+namespace App\Http\Controllers;
+
+use App\Models\Table;
+use App\Models\Booking;
+use Illuminate\Http\Request;
+use Carbon\Carbon;
+use DateTime;
+
+class BookingController extends Controller
+{
+    public function index()
+    {
+        // Generate days for the current week starting from Sunday
+        $currentWeekStart = Carbon::now()->startOfWeek(Carbon::SUNDAY); // Sunday as the first day of the week
+        $days = [];
+        for ($i = 0; $i < 5; $i++) {
+            $days[] = [
+                'name' => $currentWeekStart->copy()->addDays($i)->locale('ar')->dayName, // Arabic day name
+                'date' => $currentWeekStart->copy()->addDays($i)->format('Y-m-d')
+            ];
+        }
+
+        $periods = ['1', '2', '3', '4', '5', '6', '7', '8'];
+        $tables = $this->getTables();
+
+        // Group bookings by table_id, day (using date), and period for each table
+        $bookings = Booking::all()->groupBy('table_id')->map(function ($tableBookings) {
+            return $tableBookings->groupBy('day')->map(function ($dayBookings) {
+                return $dayBookings->keyBy('period');
+            });
+        });
+
+        return view('welcome', compact('days', 'periods', 'tables', 'bookings'));
+    }
+
+    public function book(Request $request)
+    {
+        $request->validate([
+            'day' => 'required|string',
+            'period' => 'required|integer',
+            'booker_name' => 'required|string',
+            'subject' => 'required|string',
+            'table_id' => 'required|exists:tables,id',
+            'password' => 'required|string',
+        ]);
+
+        if ($request->input('password') !== 'ahmed5') {
+            return redirect()->route('home')->with('error', 'كلمة المرور غير صحيحة!');
+        }
+
+        $existingBooking = Booking::where('table_id', $request->input('table_id'))
+            ->where('day', $request->input('day')) // Use date instead of day name
+            ->where('period', $request->input('period'))
+            ->first();
+
+        if ($existingBooking) {
+            return redirect()->route('home')->with('error', 'هذه الفترة محجوزة بالفعل في هذا الجدول!');
+        }
+
+        Booking::create([
+            'day' => $request->input('day'), // Store date as day
+            'period' => $request->input('period'),
+            'booker_name' => $request->input('booker_name'),
+            'subject' => $request->input('subject'),
+            'table_id' => $request->input('table_id'),
+        ]);
+
+        return redirect()->route('home')->with('success', 'تم الحجز بنجاح!');
+    }
+
+    public function createNewTable(Request $request)
+{
+    $request->validate([
+        'password' => 'required|string',
+    ]);
+
+    // Check if the password is correct
+    if ($request->input('password') !== 'ahmed5') {
+        return redirect()->route('home')->with('error', 'كلمة المرور غير صحيحة!');
+    }
+
+    $tables = $this->getTables();
+    if (count($tables) >= 5) {
+        // Remove the oldest table and related bookings
+        $oldestTable = $tables->last();
+        Booking::where('table_id', $oldestTable->id)->delete();
+        Table::destroy($oldestTable->id);
+    }
+
+    // Using PHP DateTime to calculate next week's Sunday
+    $today = new DateTime();
+    $dayOfWeek = $today->format('w'); // 0 (for Sunday) through 6 (for Saturday)
+
+    // Calculate how many days to add to reach the next Sunday
+    $daysUntilNextSunday = 7 + $dayOfWeek;
+    $today->modify("+{$daysUntilNextSunday} days");
+
+    // Start from the Sunday of next week
+    $nextWeekDates = [];
+    for ($i = 0; $i < 5; $i++) {  // Assuming 5 days: Sunday to Thursday
+        $nextWeekDates[] = $today->format('Y-m-d');
+        $today->modify('+1 day');
+    }
+
+    // Create a new table
+    $newTable = Table::create([
+        'name' => 'Table ' . (count($tables) + 1),
+        // Store next week's dates if necessary
+    ]);
+
+    // Additional logic to store the dates if necessary
+
+    return redirect()->route('home')->with('success', 'تم إنشاء جدول جديد بنجاح.');
+}
+    private function getTables()
+    {
+        return Table::orderBy('created_at', 'desc')->take(5)->get();
+    }
+}
